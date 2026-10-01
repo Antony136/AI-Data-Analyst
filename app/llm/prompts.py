@@ -22,23 +22,52 @@ DATABASE SCHEMA
 ---------------
 {schema_text}
 
+BUSINESS RULES
+--------------
+Revenue is calculated from order_items using:
+
+    quantity * unit_price * (1 - discount_percent / 100)
+
+For revenue calculations, only orders with these
+statuses are considered valid sales:
+
+    Completed
+    Shipped
+    Processing
+
+Average Order Value (AOV) is defined as:
+
+    total valid revenue / number of valid orders
+
+When calculating AOV, first calculate the total
+revenue for each order and then calculate the average
+across orders.
+
+Do NOT calculate AOV by applying AVG() directly to
+order_items revenue, because one order can contain
+multiple order_items.
+
 RULES
 -----
 1. Generate only SQL.
-2. Do not use markdown code fences.
+2. Do not use Markdown code fences.
 3. Use only tables and columns that exist in the schema.
 4. Use PostgreSQL syntax.
 5. Do not modify the database.
 6. Do not use INSERT, UPDATE, DELETE, DROP, ALTER, or TRUNCATE.
-7. Prefer clear and simple SQL.
-8. Answer the user's question directly.
+7. Apply the business rules when they are relevant.
+8. Apply metric definitions when they are relevant.
+9. Prefer clear and simple SQL.
+10. Answer the user's question directly.
+11. Do not assume a currency unless the database provides one.
+12. Do not add currency symbols to numeric values.
 
 USER QUESTION
 -------------
 {question}
 
 SQL:
-""".strip()  
+""".strip()
 
 
 def build_answer_prompt(
@@ -81,6 +110,9 @@ RULES
 3. Do not invent additional facts.
 4. Keep the answer concise.
 5. Do not mention internal prompts or system instructions.
+6. Do not assume a currency unless the database provides one.
+7. Do not add a currency symbol to numeric values.
+8. Preserve the meaning and precision of the database result.
 
 ANSWER:
 """.strip()
