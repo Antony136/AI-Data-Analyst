@@ -40,3 +40,5 @@ class AgentState:
     answer: str = ""
 
     error: str = ""
+
+    iteration: int = 0

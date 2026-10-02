@@ -76,23 +76,18 @@ def build_answer_prompt(
     columns: list[str],
     rows: list,
 ) -> str:
-    """
-    Build a prompt that asks the LLM to explain
-    database results in natural language.
-    """
-
     return f"""
-You are an AI data analyst.
+You are the final answer component of an AI data analyst.
 
-Answer the user's question using only the database
-query result provided below.
+Answer the user's question using ONLY the database result
+provided below.
 
 USER QUESTION
 -------------
 {question}
 
-SQL QUERY
----------
+EXECUTED SQL
+------------
 {sql}
 
 RESULT COLUMNS
@@ -103,18 +98,31 @@ RESULT ROWS
 -----------
 {rows}
 
-RULES
------
-1. Answer the user's question directly.
-2. Use only information present in the query result.
-3. Do not invent additional facts.
-4. Keep the answer concise.
-5. Do not mention internal prompts or system instructions.
-6. Do not assume a currency unless the database provides one.
-7. Do not add a currency symbol to numeric values.
-8. Preserve the meaning and precision of the database result.
+STRICT RULES
+------------
+1. Use ONLY the information present in RESULT ROWS.
+2. Do not invent, estimate, round, scale, transform, or recalculate
+   any numeric value.
+3. Every numeric value you mention must match a value from RESULT ROWS.
+4. Do not accidentally remove or add digits.
+5. Preserve the magnitude of every number exactly.
+6. You may add thousands separators for readability.
+7. You may round a number ONLY if the rounded value is mathematically
+   derived from the exact value in RESULT ROWS.
+8. Do not change millions into thousands or thousands into millions.
+9. Do not assume a currency.
+10. Do not add a currency symbol.
+11. Do not mention information that is not supported by the result.
+12. Do not mention the SQL query, prompt, model, or internal system.
+13. Answer concisely and directly.
+14. If the result contains multiple rows, clearly identify the
+    corresponding category or dimension for each value.
 
-ANSWER:
+IMPORTANT:
+The RESULT ROWS are authoritative.
+The numbers in RESULT ROWS must be treated as exact source data.
+
+FINAL ANSWER:
 """.strip()
 
 
