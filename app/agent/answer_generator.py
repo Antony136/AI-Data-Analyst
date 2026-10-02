@@ -1,21 +1,57 @@
 """
 Final answer generation component for AI Data Analyst.
 
-Generates a natural-language answer, validates it
-against the original database result, normalizes
-presentation formatting, and retries when unsupported
-numeric values are generated.
+The LLM provides natural-language explanation only.
+
+Authoritative numeric values are formatted deterministically
+by Python and appended directly to the final answer.
 """
 
-from app.guardrails.answer_guard import validate_answer
-from app.llm.client import generate_response
-from app.llm.prompts import (
-    build_answer_correction_prompt,
-    build_answer_prompt,
+from app.analysis.result_formatter import (
+    format_tabular_result,
 )
+from app.llm.client import generate_response
 
 
-MAX_ANSWER_RETRIES = 2
+def build_explanation_prompt(
+    question: str,
+    formatted_result: str,
+) -> str:
+    """
+    Build a prompt that prevents the LLM from generating
+    authoritative numeric values.
+    """
+
+    return f"""
+You are the explanation component of an AI data analyst.
+
+USER QUESTION
+-------------
+{question}
+
+AUTHORITATIVE DATABASE RESULT
+-----------------------------
+{formatted_result}
+
+Your task is to provide a short natural-language
+explanation of the result.
+
+STRICT RULES
+------------
+1. Do NOT write any numbers.
+2. Do NOT write percentages.
+3. Do NOT write currency symbols.
+4. Do NOT calculate any values.
+5. Do NOT repeat numeric values from the result.
+6. Do NOT invent facts.
+7. You may describe qualitative observations.
+8. Keep the explanation concise.
+9. Do not mention SQL, prompts, models, or internal systems.
+10. If the result is already self-explanatory, a single
+    short sentence is sufficient.
+
+EXPLANATION:
+""".strip()
 
 
 def generate_answer(
@@ -25,67 +61,36 @@ def generate_answer(
     rows: list,
 ) -> str:
     """
-    Generate and validate the final natural-language answer.
+    Generate a grounded final answer.
 
-    Pipeline:
+    Architecture:
 
         Database Result
               ↓
-        LLM Answer Generation
+        Deterministic Formatter
               ↓
-        Answer Guard
+        Exact Numeric Result
               ↓
-        Correction if invalid
+        LLM Explanation
               ↓
-        Answer Guard
-              ↓
-        Validated Answer
+        Final Answer
     """
 
-    prompt = build_answer_prompt(
-        question=question,
-        sql=sql,
+    formatted_result = format_tabular_result(
         columns=columns,
         rows=rows,
     )
 
-    answer = generate_response(
-        prompt
+    prompt = build_explanation_prompt(
+        question=question,
+        formatted_result=formatted_result,
     )
 
-    for attempt in range(
-        MAX_ANSWER_RETRIES + 1
-    ):
-        valid, result = validate_answer(
-            answer=answer,
-            rows=rows,
-        )
+    explanation = generate_response(
+        prompt
+    ).strip()
 
-        if valid:
-            return result
-
-        if attempt >= MAX_ANSWER_RETRIES:
-            raise ValueError(
-                "Generated answer failed validation "
-                f"after {MAX_ANSWER_RETRIES} retries. "
-                f"Last error: {result}"
-            )
-
-        correction_prompt = (
-            build_answer_correction_prompt(
-                question=question,
-                sql=sql,
-                columns=columns,
-                rows=rows,
-                failed_answer=answer,
-                error_message=result,
-            )
-        )
-
-        answer = generate_response(
-            correction_prompt
-        )
-
-    raise RuntimeError(
-        "Unexpected answer generation state."
+    return (
+        f"{explanation}\n\n"
+        f"{formatted_result}"
     )

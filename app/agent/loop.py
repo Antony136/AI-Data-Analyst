@@ -1,9 +1,11 @@
 """
 Main agent loop for AI Data Analyst.
 
-Connects planning, validation, schema retrieval, SQL generation,
-SQL correction, tool execution, and final answer generation.
+Coordinates planning, SQL generation, tool execution,
+retries, result handling, and final answer generation.
 """
+
+from time import perf_counter
 
 from app.agent.answer_generator import generate_answer
 from app.agent.executor import execute_tool
@@ -14,111 +16,195 @@ from app.agent.sql_generator import (
     generate_sql,
 )
 from app.agent.state import AgentState
+from app.agent.trace import AgentTrace
+from app.database.schema import format_schema_for_llm
+from app.database.schema import get_schema
 from app.guardrails.plan_validator import validate_plan
-from app.tools.schema_tool import get_database_schema
 
 
 def run_agent(question: str) -> AgentState:
-    """
-    Run the complete analytics agent for a user question.
-    """
+    state = AgentState(question=question)
 
-    state = AgentState(
-        question=question,
-    )
+    trace = AgentTrace(question=question)
+    trace.start()
+    state.trace = trace
 
-    # --------------------------------------------------
-    # 1. Get database schema
-    # --------------------------------------------------
-
-    state.schema_text = get_database_schema()
-
-    # --------------------------------------------------
-    # 2. Ask the LLM planner for a tool plan
-    # --------------------------------------------------
-
-    planned_tools = plan_tools(question)
-
-    # --------------------------------------------------
-    # 3. Validate the LLM-generated plan
-    # --------------------------------------------------
-
-    state.selected_tools = validate_plan(
-        planned_tools
-    )
-
-    # --------------------------------------------------
-    # 4. Generate SQL when database data is required
-    # --------------------------------------------------
-
-    if "sql_query" in state.selected_tools:
-        state.sql = generate_sql(
-            question=question,
-            schema_text=state.schema_text,
+    try:
+        # ---------------------------------------------------------
+        # 1. Load database schema
+        # ---------------------------------------------------------
+        state.schema_text = format_schema_for_llm(
+            get_schema()
         )
 
-    # --------------------------------------------------
-    # 5. Execute selected tools
-    # --------------------------------------------------
+        # ---------------------------------------------------------
+        # 2. Plan tools
+        # ---------------------------------------------------------
+        selected_tools = plan_tools(question)
 
-    for tool_name in state.selected_tools:
-        state.iteration += 1
+        state.selected_tools = validate_plan(
+            selected_tools
+        )
 
-        # --------------------------------------------------
-        # SQL execution gets controlled retry handling.
-        # --------------------------------------------------
+        trace.selected_tools = state.selected_tools.copy()
 
-        if tool_name == "sql_query":
-
-            for attempt in range(
-                MAX_SQL_RETRIES + 1
-            ):
-                try:
-                    state = execute_tool(
-                        tool_name=tool_name,
-                        state=state,
-                    )
-
-                    # SQL executed successfully.
-                    break
-
-                except Exception as error:
-
-                    # Store the error in agent state.
-                    state.error = str(error)
-
-                    # No retries remaining.
-                    if attempt >= MAX_SQL_RETRIES:
-                        raise RuntimeError(
-                            "SQL execution failed after "
-                            f"{MAX_SQL_RETRIES} retries. "
-                            f"Last error: {error}"
-                        ) from error
-
-                    # Ask the LLM to correct the failed SQL.
-                    state.sql = correct_sql(
-                        question=state.question,
-                        schema_text=state.schema_text,
-                        failed_sql=state.sql,
-                        error_message=str(error),
-                    )
-
-        else:
-            state = execute_tool(
-                tool_name=tool_name,
-                state=state,
+        # ---------------------------------------------------------
+        # 3. Generate SQL
+        # ---------------------------------------------------------
+        if "sql_query" in state.selected_tools:
+            state.sql = generate_sql(
+                question=question,
+                schema_text=state.schema_text,
             )
 
-    # --------------------------------------------------
-    # 6. Generate final natural-language answer
-    # --------------------------------------------------
+            trace.sql = state.sql
 
-    if state.sql and state.columns:
-        state.answer = generate_answer(
-            question=state.question,
-            sql=state.sql,
-            columns=state.columns,
-            rows=state.rows,
-        )
+        # ---------------------------------------------------------
+        # 4. Execute tools
+        # ---------------------------------------------------------
+        for tool_name in state.selected_tools:
+            state.iteration += 1
 
-    return state
+            tool_start = perf_counter()
+
+            try:
+                execute_tool(
+                    tool_name=tool_name,
+                    state=state,
+                )
+
+                duration_ms = (
+                    perf_counter() - tool_start
+                ) * 1000
+
+                # -------------------------------------------------
+                # Record SQL result
+                # -------------------------------------------------
+                if tool_name == "sql_query":
+                    trace.sql = state.sql
+
+                    trace.set_result(
+                        columns=state.columns,
+                        rows=state.rows,
+                    )
+
+                trace.add_tool_trace(
+                    tool_name=tool_name,
+                    success=True,
+                    duration_ms=duration_ms,
+                )
+
+            except Exception as error:
+                duration_ms = (
+                    perf_counter() - tool_start
+                ) * 1000
+
+                trace.add_tool_trace(
+                    tool_name=tool_name,
+                    success=False,
+                    duration_ms=duration_ms,
+                    error=str(error),
+                )
+
+                trace.add_error(str(error))
+
+                # -------------------------------------------------
+                # Only SQL execution failures are retryable.
+                # -------------------------------------------------
+                if tool_name != "sql_query":
+                    raise
+
+                last_error = error
+
+                for retry_number in range(
+                    1,
+                    MAX_SQL_RETRIES + 1,
+                ):
+                    trace.sql_retries = retry_number
+
+                    retry_start = perf_counter()
+
+                    try:
+                        # -----------------------------------------
+                        # Generate corrected SQL
+                        # -----------------------------------------
+                        state.sql = correct_sql(
+                            question=question,
+                            schema_text=state.schema_text,
+                            failed_sql=state.sql,
+                            error_message=str(last_error),
+                        )
+                        print("\nSQL RETRY", retry_number)
+                        print("-" * 70)
+                        print(state.sql)
+
+                        trace.sql = state.sql
+
+                        # -----------------------------------------
+                        # Execute corrected SQL
+                        # -----------------------------------------
+                        execute_tool(
+                            tool_name="sql_query",
+                            state=state,
+                        )
+
+                        retry_duration_ms = (
+                            perf_counter() - retry_start
+                        ) * 1000
+
+                        trace.set_result(
+                            columns=state.columns,
+                            rows=state.rows,
+                        )
+
+                        trace.add_tool_trace(
+                            tool_name="sql_query_retry",
+                            success=True,
+                            duration_ms=retry_duration_ms,
+                        )
+
+                        break
+
+                    except Exception as retry_error:
+                        last_error = retry_error
+
+                        retry_duration_ms = (
+                            perf_counter() - retry_start
+                        ) * 1000
+
+                        trace.add_tool_trace(
+                            tool_name="sql_query_retry",
+                            success=False,
+                            duration_ms=retry_duration_ms,
+                            error=str(retry_error),
+                        )
+
+                        trace.add_error(
+                            str(retry_error)
+                        )
+
+                        if retry_number == MAX_SQL_RETRIES:
+                            raise
+
+        # ---------------------------------------------------------
+        # 5. Generate final answer
+        # ---------------------------------------------------------
+        if state.columns:
+            state.answer = generate_answer(
+                question=question,
+                sql=state.sql,
+                columns=state.columns,
+                rows=state.rows,
+            )
+
+            trace.final_answer = state.answer
+
+        return state
+
+    except Exception as error:
+        state.error = str(error)
+        trace.add_error(str(error))
+        raise
+
+    finally:
+        trace.finish()

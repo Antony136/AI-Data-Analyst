@@ -27,16 +27,10 @@ def clean_sql(sql: str) -> str:
 
     # Remove Markdown SQL code fences.
     sql = re.sub(
-        r"^```(?:sql)?\s*",
+        r"```(?:sql)?",
         "",
         sql,
         flags=re.IGNORECASE,
-    )
-
-    sql = re.sub(
-        r"\s*```$",
-        "",
-        sql,
     )
 
     # Remove common prefixes such as:
@@ -60,12 +54,9 @@ def clean_sql(sql: str) -> str:
     if select_match:
         sql = sql[select_match.start():]
 
-    # Remove trailing Markdown code fences or whitespace.
-    sql = re.sub(
-        r"\s*```$",
-        "",
-        sql,
-    )
+    # Remove any remaining Markdown backticks.
+    sql = sql.replace("```", "")
+    sql = sql.replace("`", "")
 
     return sql.strip()
 
@@ -79,6 +70,9 @@ def validate_sql(sql: str) -> tuple[bool, str]:
 
     if not cleaned_sql:
         return False, "SQL query is empty."
+
+    if "```" in cleaned_sql:
+        return False, "Markdown code fences are not allowed in SQL."
 
     normalized_sql = cleaned_sql.upper()
 
