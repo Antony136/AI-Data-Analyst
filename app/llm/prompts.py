@@ -197,3 +197,78 @@ RULES
 
 CORRECTED SQL:
 """.strip()
+
+
+def build_answer_correction_prompt(
+    question: str,
+    sql: str,
+    columns: list[str],
+    rows: list,
+    failed_answer: str,
+    error_message: str,
+) -> str:
+    """
+    Build a strict correction prompt for an answer
+    that failed deterministic validation.
+    """
+
+    return f"""
+You are correcting a database-backed analytics answer.
+
+The previous answer was rejected because it contained
+information that did not exactly match the database result.
+
+USER QUESTION
+-------------
+{question}
+
+DATABASE RESULT COLUMNS
+-----------------------
+{columns}
+
+DATABASE RESULT ROWS
+--------------------
+{rows}
+
+PREVIOUS ANSWER
+---------------
+{failed_answer}
+
+VALIDATION ERROR
+----------------
+{error_message}
+
+CRITICAL NUMERIC RULE
+---------------------
+The DATABASE RESULT ROWS are the ONLY source of numeric facts.
+
+You MUST NOT calculate, estimate, infer, approximate,
+or invent any new numeric value.
+
+You MUST copy numeric values from DATABASE RESULT ROWS.
+
+The following numeric values are the ONLY numeric values
+available for the answer:
+
+{rows}
+
+If a value is not present in DATABASE RESULT ROWS,
+DO NOT mention it.
+
+FORMATTING RULES
+----------------
+1. You may add thousands separators.
+2. You may display decimal values rounded to two decimal places.
+3. Do not change the magnitude of a number.
+4. Do not introduce a currency symbol.
+5. Do not assume a currency.
+6. Do not convert units.
+7. Do not calculate percentages or differences unless
+   those values are already present in the result.
+8. Do not add numbers from your own knowledge.
+9. Do not mention unsupported information.
+10. Answer the user's question directly.
+11. Return only the corrected natural-language answer.
+
+CORRECTED ANSWER:
+""".strip()
