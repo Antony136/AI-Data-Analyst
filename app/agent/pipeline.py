@@ -12,6 +12,8 @@ SQL validation
     ↓
 PostgreSQL execution
     ↓
+If execution fails → LLM corrects SQL → retry
+    ↓
 LLM generates final answer
 """
 
@@ -23,31 +25,18 @@ from app.database.schema import (
 from app.guardrails.sql_validator import validate_sql
 from app.llm.client import generate_response
 from app.llm.prompts import (
-    build_sql_prompt,
     build_answer_prompt,
+    build_sql_correction_prompt,
+    build_sql_prompt,
 )
 
 
+MAX_SQL_RETRIES = 2
+
+
 def answer_question(question: str) -> dict:
-    """
-    Process a natural-language analytical question.
-
-    Returns:
-        A dictionary containing the generated SQL,
-        query result, and final answer.
-    """
-
-    # --------------------------------------------------------
-    # STEP 1: LOAD DATABASE SCHEMA
-    # --------------------------------------------------------
-
     schema = get_schema()
-
     schema_text = format_schema_for_llm(schema)
-
-    # --------------------------------------------------------
-    # STEP 2: GENERATE SQL
-    # --------------------------------------------------------
 
     sql_prompt = build_sql_prompt(
         question=question,
@@ -55,10 +44,6 @@ def answer_question(question: str) -> dict:
     )
 
     generated_sql = generate_response(sql_prompt)
-
-    # --------------------------------------------------------
-    # STEP 3: VALIDATE SQL
-    # --------------------------------------------------------
 
     valid, result = validate_sql(generated_sql)
 
@@ -69,15 +54,43 @@ def answer_question(question: str) -> dict:
 
     clean_sql = result
 
-    # --------------------------------------------------------
-    # STEP 4: EXECUTE SQL
-    # --------------------------------------------------------
+    last_error = None
 
-    columns, rows = execute_query(clean_sql)
+    for attempt in range(MAX_SQL_RETRIES + 1):
+        try:
+            columns, rows = execute_query(clean_sql)
+            last_error = None
+            break
 
-    # --------------------------------------------------------
-    # STEP 5: GENERATE FINAL ANSWER
-    # --------------------------------------------------------
+        except Exception as error:
+            last_error = str(error)
+
+            if attempt >= MAX_SQL_RETRIES:
+                raise RuntimeError(
+                    "SQL execution failed after "
+                    f"{MAX_SQL_RETRIES} retries: "
+                    f"{last_error}"
+                ) from error
+
+            correction_prompt = build_sql_correction_prompt(
+                question=question,
+                schema_text=schema_text,
+                failed_sql=clean_sql,
+                error_message=last_error,
+            )
+
+            corrected_sql = generate_response(
+                correction_prompt
+            )
+
+            valid, result = validate_sql(corrected_sql)
+
+            if not valid:
+                raise ValueError(
+                    f"Corrected SQL was rejected: {result}"
+                )
+
+            clean_sql = result
 
     answer_prompt = build_answer_prompt(
         question=question,
