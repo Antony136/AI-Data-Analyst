@@ -6,7 +6,7 @@ def main():
     print("AI DATA ANALYST - COMPLETE AGENT TEST")
     print("=" * 70)
 
-    question = "What was the revenue by product category in 2025?"
+    question = "What percentage of revenue came from each category?"
 
     state = run_agent(question)
 

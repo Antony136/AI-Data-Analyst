@@ -30,41 +30,21 @@ def run_agent(question: str) -> AgentState:
     state.trace = trace
 
     try:
-        # ---------------------------------------------------------
-        # 1. Load database schema
-        # ---------------------------------------------------------
-        state.schema_text = format_schema_for_llm(
-            get_schema()
-        )
+        state.schema_text = format_schema_for_llm(get_schema())
 
-        # ---------------------------------------------------------
-        # 2. Plan tools
-        # ---------------------------------------------------------
         selected_tools = plan_tools(question)
-
-        state.selected_tools = validate_plan(
-            selected_tools
-        )
-
+        state.selected_tools = validate_plan(selected_tools)
         trace.selected_tools = state.selected_tools.copy()
 
-        # ---------------------------------------------------------
-        # 3. Generate SQL
-        # ---------------------------------------------------------
         if "sql_query" in state.selected_tools:
             state.sql = generate_sql(
                 question=question,
                 schema_text=state.schema_text,
             )
-
             trace.sql = state.sql
 
-        # ---------------------------------------------------------
-        # 4. Execute tools
-        # ---------------------------------------------------------
         for tool_name in state.selected_tools:
             state.iteration += 1
-
             tool_start = perf_counter()
 
             try:
@@ -77,12 +57,8 @@ def run_agent(question: str) -> AgentState:
                     perf_counter() - tool_start
                 ) * 1000
 
-                # -------------------------------------------------
-                # Record SQL result
-                # -------------------------------------------------
                 if tool_name == "sql_query":
                     trace.sql = state.sql
-
                     trace.set_result(
                         columns=state.columns,
                         rows=state.rows,
@@ -108,9 +84,6 @@ def run_agent(question: str) -> AgentState:
 
                 trace.add_error(str(error))
 
-                # -------------------------------------------------
-                # Only SQL execution failures are retryable.
-                # -------------------------------------------------
                 if tool_name != "sql_query":
                     raise
 
@@ -121,28 +94,18 @@ def run_agent(question: str) -> AgentState:
                     MAX_SQL_RETRIES + 1,
                 ):
                     trace.sql_retries = retry_number
-
                     retry_start = perf_counter()
 
                     try:
-                        # -----------------------------------------
-                        # Generate corrected SQL
-                        # -----------------------------------------
                         state.sql = correct_sql(
                             question=question,
                             schema_text=state.schema_text,
                             failed_sql=state.sql,
                             error_message=str(last_error),
                         )
-                        print("\nSQL RETRY", retry_number)
-                        print("-" * 70)
-                        print(state.sql)
 
                         trace.sql = state.sql
 
-                        # -----------------------------------------
-                        # Execute corrected SQL
-                        # -----------------------------------------
                         execute_tool(
                             tool_name="sql_query",
                             state=state,
@@ -186,9 +149,6 @@ def run_agent(question: str) -> AgentState:
                         if retry_number == MAX_SQL_RETRIES:
                             raise
 
-        # ---------------------------------------------------------
-        # 5. Generate final answer
-        # ---------------------------------------------------------
         if state.columns:
             state.answer = generate_answer(
                 question=question,
@@ -196,7 +156,6 @@ def run_agent(question: str) -> AgentState:
                 columns=state.columns,
                 rows=state.rows,
             )
-
             trace.final_answer = state.answer
 
         return state

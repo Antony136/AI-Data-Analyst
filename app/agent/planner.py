@@ -1,8 +1,8 @@
 """
 Planning component for AI Data Analyst.
 
-Determines which registered tools are required
-to answer a user's analytics question.
+Uses an LLM to interpret the user's question and then
+applies deterministic rules to produce a reliable tool plan.
 """
 
 import json
@@ -16,6 +16,7 @@ def build_planner_prompt(question: str) -> str:
     """
     Build the prompt used by the planner LLM.
     """
+
     available_tools = list_tools()
 
     return f"""
@@ -38,7 +39,8 @@ sql_query:
 Retrieve data from the PostgreSQL database.
 
 create_dataframe:
-Convert SQL results into a Pandas DataFrame.
+Convert SQL results into a Pandas DataFrame for
+downstream Python analysis.
 
 calculate_percentage:
 Calculate percentage contribution of values.
@@ -54,22 +56,27 @@ PLANNING RULES
 1. Select only tools from the available tools list.
 2. Select the minimum tools necessary.
 3. Always use sql_query when database data is required.
-4. Use create_dataframe only when Python/Pandas processing
-   is actually required.
-5. Use calculate_percentage only when percentage contribution
-   must be calculated.
-6. Use calculate_summary only when statistical summary
-   is explicitly required.
+4. Use create_dataframe ONLY when another Python
+   analysis tool requires a DataFrame.
+5. Use calculate_percentage only when percentage
+   contribution must be calculated.
+6. Use calculate_summary only when statistical
+   summary is explicitly required.
 7. Use create_bar_chart only when a chart, graph,
-   visualization, or similar visual output is requested.
-8. Do not select tools that are not necessary.
-9. Return ONLY a JSON array of tool names.
-10. Do not use Markdown code fences.
-11. Do not include explanations.
+   visualization, plot, or similar visual output
+   is explicitly requested.
+8. Do not select create_dataframe by itself.
+9. Do not select tools that are not necessary.
+10. Return ONLY a JSON array of tool names.
+11. Do not use Markdown code fences.
+12. Do not include explanations.
 
 EXAMPLES
 --------
 Question: What is the total number of orders?
+Answer: ["sql_query"]
+
+Question: What was the revenue by category?
 Answer: ["sql_query"]
 
 Question: What percentage of revenue came from each category?
@@ -89,6 +96,7 @@ def clean_planner_response(response: str) -> str:
     """
     Remove common Markdown formatting around JSON.
     """
+
     response = response.strip()
 
     response = re.sub(
@@ -107,11 +115,117 @@ def clean_planner_response(response: str) -> str:
     return response.strip()
 
 
+def _normalize_plan(
+    question: str,
+    tools: list[str],
+) -> list[str]:
+    """
+    Apply deterministic rules to the LLM-generated plan.
+
+    The LLM interprets the question.
+    This function enforces predictable tool selection.
+    """
+
+    question_lower = question.lower()
+
+    # --------------------------------------------------------
+    # SQL
+    # --------------------------------------------------------
+
+    normalized = ["sql_query"]
+
+    # --------------------------------------------------------
+    # Percentage analysis
+    # --------------------------------------------------------
+
+    percentage_requested = any(
+        phrase in question_lower
+        for phrase in [
+            "percentage",
+            "percent",
+            "% of",
+            "share",
+            "contribution",
+        ]
+    )
+
+    if percentage_requested:
+        normalized.extend(
+            [
+                "create_dataframe",
+                "calculate_percentage",
+            ]
+        )
+
+    # --------------------------------------------------------
+    # Summary statistics
+    # --------------------------------------------------------
+
+    summary_requested = any(
+        phrase in question_lower
+        for phrase in [
+            "summary statistics",
+            "statistical summary",
+            "standard deviation",
+            "variance",
+            "median",
+            "mean",
+            "average",
+            "maximum",
+            "minimum",
+            "max",
+            "min",
+        ]
+    )
+
+    if summary_requested:
+        normalized.extend(
+            [
+                "create_dataframe",
+                "calculate_summary",
+            ]
+        )
+
+    # --------------------------------------------------------
+    # Visualization
+    # --------------------------------------------------------
+
+    visualization_requested = any(
+        phrase in question_lower
+        for phrase in [
+            "chart",
+            "graph",
+            "plot",
+            "visualization",
+            "visualize",
+        ]
+    )
+
+    if visualization_requested:
+        normalized.extend(
+            [
+                "create_dataframe",
+                "create_bar_chart",
+            ]
+        )
+
+    # --------------------------------------------------------
+    # Remove duplicates while preserving order
+    # --------------------------------------------------------
+
+    normalized = list(
+        dict.fromkeys(normalized)
+    )
+
+    return normalized
+
+
 def plan_tools(question: str) -> list[str]:
     """
-    Ask the LLM to select the tools required
-    for the user's question.
+    Ask the LLM to interpret the question and then
+    normalize the result using deterministic rules.
     """
+
     prompt = build_planner_prompt(question)
 
     response = generate_response(prompt)
@@ -138,4 +252,7 @@ def plan_tools(question: str) -> list[str]:
                 f"Planner selected unknown tool: {tool}"
             )
 
-    return tools
+    return _normalize_plan(
+        question=question,
+        tools=tools,
+    )

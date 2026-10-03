@@ -2,10 +2,11 @@
 SQL generation component for AI Data Analyst.
 
 Generates SQL from a user's natural-language question,
-validates it, and provides SQL correction support when
-database execution fails.
+validates it against the database schema, and provides
+SQL correction support when database execution fails.
 """
 
+from app.database.schema import get_schema
 from app.guardrails.sql_validator import validate_sql
 from app.llm.client import generate_response
 from app.llm.prompts import (
@@ -17,12 +18,25 @@ from app.llm.prompts import (
 MAX_SQL_RETRIES = 2
 
 
+def _get_allowed_tables() -> set[str]:
+    """
+    Return the current database table names.
+    """
+
+    schema = get_schema()
+
+    return {
+        table.name.lower()
+        for table in schema
+    }
+
+
 def generate_sql(
     question: str,
     schema_text: str,
 ) -> str:
     """
-    Generate and validate SQL for the user's question.
+    Generate and validate SQL for a user question.
     """
 
     prompt = build_sql_prompt(
@@ -32,7 +46,10 @@ def generate_sql(
 
     response = generate_response(prompt)
 
-    valid, result = validate_sql(response)
+    valid, result = validate_sql(
+        sql=response,
+        allowed_tables=_get_allowed_tables(),
+    )
 
     if not valid:
         raise ValueError(
@@ -49,10 +66,7 @@ def correct_sql(
     error_message: str,
 ) -> str:
     """
-    Ask the LLM to correct SQL that failed during
-    database execution.
-
-    The corrected SQL is validated before being returned.
+    Generate corrected SQL after a failed query.
     """
 
     prompt = build_sql_correction_prompt(
@@ -64,7 +78,10 @@ def correct_sql(
 
     response = generate_response(prompt)
 
-    valid, result = validate_sql(response)
+    valid, result = validate_sql(
+        sql=response,
+        allowed_tables=_get_allowed_tables(),
+    )
 
     if not valid:
         raise ValueError(
