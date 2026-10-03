@@ -12,29 +12,35 @@ MAX_RESULT_ROWS = 1000
 QUERY_TIMEOUT_MS = 10_000
 
 
-def validate_query_shape(sql: str) -> tuple[bool, str]:
+def validate_query_shape(
+    sql: str,
+) -> tuple[bool, str]:
     """
-    Validate the structural shape of a query before execution.
+    Validate the structural shape of a SQL query.
 
-    This guard ensures that the query:
-    - is not empty
-    - contains only one SQL statement
-    - starts with SELECT
-    - does not contain SQL comments
+    Allowed:
+    - SELECT queries
+    - WITH ... SELECT queries (CTEs)
+
+    Rejected:
+    - empty queries
+    - multiple statements
+    - SQL comments
+    - non-SELECT statements
     """
 
     sql = sql.strip()
 
-    # --------------------------------------------------
-    # 1. Query must not be empty
-    # --------------------------------------------------
+    # --------------------------------------------------------
+    # EMPTY QUERY
+    # --------------------------------------------------------
 
     if not sql:
         return False, "Query is empty."
 
-    # --------------------------------------------------
-    # 2. Reject SQL comments
-    # --------------------------------------------------
+    # --------------------------------------------------------
+    # COMMENTS
+    # --------------------------------------------------------
 
     if "--" in sql:
         return False, "SQL comments are not allowed."
@@ -42,20 +48,9 @@ def validate_query_shape(sql: str) -> tuple[bool, str]:
     if "/*" in sql or "*/" in sql:
         return False, "SQL block comments are not allowed."
 
-    # --------------------------------------------------
-    # 3. Only SELECT queries are allowed
-    # --------------------------------------------------
-
-    if not re.match(
-        r"^\s*SELECT\b",
-        sql,
-        flags=re.IGNORECASE,
-    ):
-        return False, "Only SELECT queries are allowed."
-
-    # --------------------------------------------------
-    # 4. Reject multiple statements
-    # --------------------------------------------------
+    # --------------------------------------------------------
+    # STATEMENT COUNT
+    # --------------------------------------------------------
 
     statements = [
         statement.strip()
@@ -64,14 +59,28 @@ def validate_query_shape(sql: str) -> tuple[bool, str]:
     ]
 
     if len(statements) != 1:
-        return False, "Multiple SQL statements are not allowed."
+        return (
+            False,
+            "Multiple SQL statements are not allowed.",
+        )
+
+    # --------------------------------------------------------
+    # QUERY TYPE
+    # --------------------------------------------------------
+
+    if not re.match(
+        r"^\s*(SELECT|WITH)\b",
+        sql,
+        flags=re.IGNORECASE,
+    ):
+        return False, "Only SELECT queries are allowed."
 
     return True, sql
 
 
 def get_query_limits() -> dict[str, int]:
     """
-    Return deterministic database execution limits.
+    Return deterministic database query limits.
     """
 
     return {

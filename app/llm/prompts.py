@@ -2,15 +2,17 @@
 Prompt templates for AI Data Analyst.
 """
 
+
 def build_sql_prompt(
     question: str,
     schema_text: str,
 ) -> str:
+
     return f"""
 You are an expert PostgreSQL data analyst.
 
-Generate a PostgreSQL SELECT query that retrieves
-the data required to answer the user's question.
+Your job is to generate ONE PostgreSQL SELECT query that
+directly answers the user's question.
 
 DATABASE SCHEMA
 ---------------
@@ -20,150 +22,360 @@ USER QUESTION
 -------------
 {question}
 
-BUSINESS RULES
---------------
-Revenue is calculated from order_items using:
+============================================================
+STEP 1 — IDENTIFY THE EXACT REQUESTED METRIC
+============================================================
+
+Before writing SQL, determine what the user is asking for.
+
+IMPORTANT:
+
+The word "revenue" means TOTAL REVENUE unless the user
+explicitly asks for another metric.
+
+Revenue is calculated as:
 
     quantity * unit_price * (1 - discount_percent / 100)
 
-For revenue calculations, only orders with these
-statuses are considered valid sales:
+Valid sales orders are ONLY:
 
     Completed
     Shipped
     Processing
 
-Average Order Value (AOV) is defined as:
+------------------------------------------------------------
+REVENUE
+------------------------------------------------------------
+
+If the user asks:
+
+- total revenue
+- revenue in 2025
+- revenue in 2024
+- revenue by category
+- revenue by region
+- revenue by customer segment
+- quarterly revenue
+- revenue for Q3
+- revenue contribution
+
+then calculate REVENUE.
+
+For revenue, use:
+
+    SUM(
+        order_items.quantity
+        * order_items.unit_price
+        * (1 - order_items.discount_percent / 100)
+    )
+
+Do NOT use AVG for ordinary revenue questions.
+
+Do NOT calculate Average Order Value for an ordinary
+revenue question.
+
+------------------------------------------------------------
+AVERAGE ORDER VALUE
+------------------------------------------------------------
+
+Use AVERAGE ORDER VALUE only when the user explicitly asks
+for:
+
+- average order value
+- AOV
+- average value per order
+- average revenue per order
+
+AOV means:
 
     total valid revenue / number of valid orders
 
-When calculating AOV, first calculate the total
-revenue for each order and then calculate the average
-across orders.
+AOV MUST be calculated at the ORDER level.
 
-SQL RESPONSIBILITY
-------------------
-SQL is responsible for RETRIEVING the required data.
+Correct structure:
 
-If the question requires a derived analysis such as:
-- percentage contribution
-- percentage share
-- statistical analysis
-- summary statistics
+    SELECT AVG(order_revenue)
+    FROM (
+        SELECT
+            orders.order_id,
+            SUM(
+                order_items.quantity
+                * order_items.unit_price
+                * (1 - order_items.discount_percent / 100)
+            ) AS order_revenue
+        FROM orders
+        JOIN order_items
+            ON orders.order_id = order_items.order_id
+        WHERE ...
+        GROUP BY orders.order_id
+    ) AS order_totals
 
-retrieve the values required for that analysis, but
-do not unnecessarily calculate the derived analysis
-inside SQL.
+The inner query MUST GROUP BY the unique order identifier
+before AVG is applied.
 
-The Python analysis tools will perform those
-calculations after the SQL result is converted into
-a DataFrame.
+Never calculate:
 
-For example, for:
+    AVG(order_items.quantity * ...)
 
-"What percentage of revenue came from each category?"
+for AOV.
 
-prefer returning:
+Never calculate:
+
+    AVG(SUM(...))
+
+without first grouping by order.
+
+------------------------------------------------------------
+ORDER COUNT
+------------------------------------------------------------
+
+If the user asks how many orders were placed:
+
+    COUNT(DISTINCT orders.order_id)
+
+Use DISTINCT when joins could otherwise duplicate orders.
+
+------------------------------------------------------------
+PERCENTAGE / SHARE
+------------------------------------------------------------
+
+If the user asks for:
+
+- percentage of revenue
+- revenue percentage
+- revenue share
+- contribution to revenue
+
+SQL should normally return the underlying aggregated
+revenue values.
+
+For example:
 
     category
     revenue
 
-rather than calculating the percentage inside SQL.
+The Python analysis layer can calculate the percentage.
 
-The Python percentage-analysis tool will calculate:
+Do NOT use window functions unless they are genuinely
+required by the user's requested result.
 
-    category revenue / total revenue * 100
+------------------------------------------------------------
+GROUPED REVENUE
+------------------------------------------------------------
 
-However, SQL SHOULD perform database-level aggregation
-when that aggregation is naturally part of retrieving
-the required data.
+If the user asks for revenue grouped by a dimension:
 
-For example:
+Revenue by category:
 
-    SUM(quantity * unit_price * (1 - discount_percent / 100))
+    products.category,
+    SUM(...) AS revenue
 
-is appropriate for obtaining revenue by category.
+Revenue by region:
 
+    orders.shipping_region,
+    SUM(...) AS revenue
+
+Revenue by customer segment:
+
+    customers.customer_segment,
+    SUM(...) AS revenue
+
+Quarterly revenue:
+
+    quarter,
+    SUM(...) AS revenue
+
+When the user asks for revenue, use the output alias:
+
+    revenue
+
+Do NOT rename it to:
+
+    aov
+    average_order_value
+    quarter_revenue
+    total_revenue
+
+unless that specific name is necessary for a nested query
+or explicitly requested.
+
+------------------------------------------------------------
+TIME FILTERS
+------------------------------------------------------------
+
+For year filtering, prefer:
+
+    EXTRACT(YEAR FROM orders.order_date) = 2025
+
+For quarter filtering, use the appropriate date range or
+quarter extraction.
+
+For quarterly revenue, the result should contain:
+
+    quarter
+    revenue
+
+If using DATE_TRUNC:
+
+    DATE_TRUNC('quarter', orders.order_date) AS quarter
+
+and:
+
+    SUM(...) AS revenue
+
+------------------------------------------------------------
 JOIN RULES
-----------
-1. Only JOIN a table when data from that table is
-   actually required to answer the user's question.
+------------------------------------------------------------
 
-2. Do NOT JOIN a table merely because it exists in
-   the database schema.
+Only JOIN tables that are actually required.
 
-3. Before adding a JOIN, identify the specific column
-   or filter that requires the table.
+For revenue:
 
-4. Avoid unnecessary one-to-many JOINs when calculating
-   SUM(), COUNT(), AVG(), or other aggregates.
+    order_items
+        JOIN orders
 
-5. A JOIN must not unintentionally multiply rows.
+because order status and order date belong to orders.
 
-6. For revenue calculations, order_items must be joined
-   to orders when order-level filters such as order_status
-   are required.
+Join products ONLY when product information such as:
 
-7. Products should be joined when product attributes such
-   as category, product name, or subcategory are required.
+    category
+    product_name
+    subcategory
 
-8. Payments should be joined ONLY when payment-related
-   information or payment-related filtering is explicitly
-   required by the user's question.
+is required.
 
-9. Customers should be joined ONLY when customer-related
-   information or customer-related filtering is explicitly
-   required by the user's question.
+Join customers ONLY when customer information such as:
 
-10. If the question can be answered using fewer tables,
-    prefer the query using fewer tables.
+    customer_segment
+    region/customer information
 
-11. Never add a JOIN simply to make the query appear more
-    complete.
+is required.
 
-12. When calculating aggregates, reason about the row
-    cardinality introduced by every JOIN.
+Join payments ONLY when the question explicitly requires
+payment information or payment filtering.
 
+Do NOT JOIN a table merely because it exists.
+
+Be careful with one-to-many relationships.
+
+Never introduce a JOIN that changes the intended aggregate.
+
+------------------------------------------------------------
+AGGREGATION RULES
+------------------------------------------------------------
+
+For ordinary revenue:
+
+    SUM(order_items.quantity * ...)
+
+For grouped revenue:
+
+    GROUP BY the requested dimension.
+
+For AOV:
+
+    GROUP BY orders.order_id
+
+inside the inner query before applying AVG outside it.
+
+Do NOT use window functions unless the user's requested
+result genuinely requires one.
+
+Do NOT nest aggregate functions incorrectly.
+
+For example, this is invalid:
+
+    SUM(SUM(...))
+
+unless used correctly as a window expression.
+
+Do not generate aggregate/window combinations that
+PostgreSQL will reject.
+
+------------------------------------------------------------
+SQL OUTPUT CONTRACT
+------------------------------------------------------------
+
+Use simple, predictable column aliases.
+
+For revenue:
+
+    AS revenue
+
+For AOV:
+
+    AS average_order_value
+
+For category:
+
+    category
+
+For region:
+
+    shipping_region
+
+For customer segment:
+
+    customer_segment
+
+For quarterly revenue:
+
+    quarter
+    revenue
+
+Do not unnecessarily rename source dimensions.
+
+------------------------------------------------------------
 GENERAL SQL RULES
------------------
-1. Return ONLY the SQL query.
+------------------------------------------------------------
+
+1. Return ONLY executable PostgreSQL SQL.
 2. Do NOT use Markdown code fences.
-3. Use PostgreSQL syntax.
-4. Use ONLY tables and columns present in the schema.
-5. Preserve the user's intended question.
-6. Apply the business rules above.
-7. Use appropriate JOIN conditions.
-8. Use unique table aliases.
-9. Do not reference a table name after assigning it
-   an alias; use the alias consistently.
-10. Do not invent tables, columns, functions, or fields.
+3. Use ONLY tables and columns present in the schema.
+4. Preserve the exact intent of the user's question.
+5. Use valid PostgreSQL syntax.
+6. Use unique table aliases.
+7. Once a table has an alias, consistently use that alias.
+8. Never reference an undefined alias.
+9. Never use the same alias for different tables.
+10. Do not invent tables or columns.
 11. Do not use INSERT, UPDATE, DELETE, DROP, ALTER,
     TRUNCATE, CREATE, GRANT, or REVOKE.
-12. Do not modify database data or database structure.
+12. Do not modify database data or structure.
 13. Do not assume a currency.
 14. Do not add currency symbols.
-15. Do not add unnecessary tables or JOINs.
-16. Do not calculate derived Python-analysis metrics
-    when the raw/aggregated values are sufficient.
+15. Do not add unnecessary JOINs.
+16. Do not add unnecessary subqueries.
+17. Do not add unnecessary window functions.
+18. Do not solve a different metric than the user requested.
+19. Do not turn a revenue question into an AOV question.
+20. Do not turn an AOV question into ordinary row-level AVG.
 
-FINAL CHECK
------------
-Before returning the SQL, verify:
+============================================================
+FINAL VERIFICATION
+============================================================
 
-- Every referenced table exists in the schema.
-- Every JOIN is necessary.
-- Every JOIN has a valid relationship.
-- No JOIN unnecessarily multiplies rows.
-- Aggregate calculations are not distorted by
-  unnecessary relationships.
-- Every alias is unique.
-- Every alias is used consistently.
-- Only required columns are selected.
-- The query answers the user's actual question.
+Before returning SQL, mentally verify:
 
-OUTPUT
-------
-Return only executable PostgreSQL SQL.
+1. What exact metric did the user request?
+2. Is this revenue, AOV, order count, percentage,
+   or another metric?
+3. If the question says revenue, did I use SUM rather than AVG?
+4. If the question says AOV, did I GROUP BY order_id first?
+5. Are all required tables present?
+6. Are all JOINs necessary?
+7. Are all aliases defined exactly once?
+8. Are all aliases referenced consistently?
+9. Are aggregate functions valid PostgreSQL?
+10. Does the result column naming match the requested metric?
+11. Does the query answer the user's exact question?
+
+The user's question has priority over all examples and
+business-rule explanations above.
+
+Return ONLY the SQL.
+
+SQL:
 """.strip()
 
 
@@ -173,11 +385,12 @@ def build_answer_prompt(
     columns: list[str],
     rows: str,
 ) -> str:
+
     return f"""
 You are the final answer component of an AI data analyst.
 
 Answer the user's question using ONLY the
-AUTHORITATIVE DATABASE RESULT provided below.
+AUTHORITATIVE DATABASE RESULT below.
 
 USER QUESTION
 -------------
@@ -197,34 +410,31 @@ AUTHORITATIVE DATABASE RESULT
 
 STRICT RULES
 ------------
-1. The AUTHORITATIVE DATABASE RESULT is the source of truth.
-2. Do not invent any numbers.
-3. Do not estimate or guess values.
-4. Do not change the magnitude of any number.
+
+1. The database result is the source of truth.
+2. Do not invent numbers.
+3. Do not estimate or guess.
+4. Do not change numeric values.
 5. Do not add or remove digits.
-6. You may use the numbers exactly as shown.
-7. You may add natural-language explanation.
-8. Do not introduce a currency symbol.
-9. Do not assume a currency.
-10. Do not convert units.
-11. Do not calculate new percentages, differences,
-    totals, averages, or other metrics unless those
-    values are already present in the result.
-12. Do not mention SQL, prompts, models, or internal systems.
-13. Answer concisely and directly.
-14. Clearly associate each value with its corresponding
+6. Do not assume a currency.
+7. Do not add currency symbols.
+8. Do not convert units.
+9. Do not calculate new metrics unless they are already
+   present in the database result.
+10. Clearly associate every value with its corresponding
     category or dimension.
+11. Answer concisely.
+12. Do not mention SQL, prompts, models, or internal systems.
 
 IMPORTANT
 ---------
-The AUTHORITATIVE DATABASE RESULT was generated
-directly from the database by the application.
+
+The database result was generated directly from PostgreSQL.
 
 Do not modify its numeric values.
 
 FINAL ANSWER:
 """.strip()
-
 
 
 def build_sql_correction_prompt(
@@ -233,19 +443,14 @@ def build_sql_correction_prompt(
     failed_sql: str,
     error_message: str,
 ) -> str:
-    """
-    Build a strict prompt asking the LLM to correct SQL
-    that failed during PostgreSQL execution.
-    """
 
     return f"""
-You are an expert PostgreSQL data analyst.
+You are an expert PostgreSQL data analyst correcting a
+failed SQL query.
 
-A SQL query generated for the user's question failed
-during PostgreSQL database execution.
-
-Your task is to make the SMALLEST POSSIBLE CORRECTION
-needed to fix the reported database error.
+Your task is to make the SMALLEST correction necessary
+to produce valid SQL that answers the user's ORIGINAL
+question.
 
 DATABASE SCHEMA
 ---------------
@@ -265,74 +470,85 @@ DATABASE ERROR
 
 BUSINESS RULES
 --------------
-Revenue is calculated from order_items using:
+
+Revenue:
 
     quantity * unit_price * (1 - discount_percent / 100)
 
-For revenue calculations, only orders with these
-statuses are considered valid sales:
+Valid revenue orders:
 
     Completed
     Shipped
     Processing
 
-Average Order Value (AOV) is defined as:
+IMPORTANT METRIC RULE
+---------------------
 
-    total valid revenue / number of valid orders
+The user's question determines the metric.
 
-When calculating AOV, first calculate the total
-revenue for each order and then calculate the average
-across orders.
+If the question asks for ordinary revenue:
+
+    use SUM(...)
+
+Do NOT change ordinary revenue into AOV.
+
+AOV is ONLY for questions explicitly asking for:
+
+    average order value
+    AOV
+    average value per order
+    average revenue per order
+
+For AOV, calculate revenue per order first:
+
+    GROUP BY orders.order_id
+
+then:
+
+    AVG(order_revenue)
+
+Do not introduce AOV logic into a normal revenue query.
 
 CORRECTION RULES
 ----------------
-1. Return ONLY the corrected SQL.
+
+1. Return ONLY corrected PostgreSQL SQL.
 2. Do NOT use Markdown code fences.
-3. Use PostgreSQL syntax.
-4. Use ONLY tables and columns present in the schema.
-5. Preserve the user's original question and intended result.
-6. Preserve the existing query structure whenever possible.
-7. Make the smallest possible change required to fix
-   the reported database error.
-8. Do NOT add tables or JOINs unless they are required
-   to fix the specific error.
-9. Do NOT remove tables or JOINs unless they are
-   responsible for the specific error.
-10. Do NOT change the calculation logic unless the
-    database error requires it.
-11. Do NOT change filters unless the database error
-    requires it.
-12. Do NOT change GROUP BY logic unless the database
-    error requires it.
-13. Every table alias MUST be unique.
-14. Never assign the same alias to two different tables.
-15. Before returning the SQL, verify that every alias
-    referenced in SELECT, JOIN, WHERE, GROUP BY, and
-    ORDER BY is defined exactly once.
-16. Do NOT introduce unnecessary tables such as payments
-    when the question can be answered from the existing
-    tables.
-17. Do NOT invent functions that are not supported by
-    PostgreSQL.
-18. Do NOT use INSERT, UPDATE, DELETE, DROP, ALTER,
+3. Preserve the user's original intent.
+4. Fix the reported database error.
+5. Do not redesign a correct query unnecessarily.
+6. Do not introduce unnecessary JOINs.
+7. Do not introduce unnecessary subqueries.
+8. Do not introduce unnecessary window functions.
+9. Do not change the requested metric.
+10. Every alias must be defined exactly once.
+11. Every referenced alias must exist.
+12. Every table must exist in the schema.
+13. Do not invent columns.
+14. Do not invent functions.
+15. Do not use INSERT, UPDATE, DELETE, DROP, ALTER,
     TRUNCATE, CREATE, GRANT, or REVOKE.
-19. Do NOT assume a currency.
-20. Do NOT add currency symbols.
+16. Do not assume a currency.
+17. Do not add currency symbols.
 
-IMPORTANT
----------
-The DATABASE ERROR tells you what is wrong.
+FINAL CHECK
+-----------
 
-Fix THAT error.
+Before returning SQL verify:
 
-Do not redesign the query.
+- The query still answers the ORIGINAL question.
+- Revenue questions use SUM.
+- AOV questions use per-order GROUP BY before AVG.
+- All aliases are valid.
+- All JOINs are valid.
+- All aggregate expressions are valid PostgreSQL.
+- No unnecessary window functions were introduced.
 
-Do not rewrite a correct query unnecessarily.
-
-Return only executable PostgreSQL SQL.
+Return ONLY executable PostgreSQL SQL.
 
 CORRECTED SQL:
 """.strip()
+
 
 def build_answer_correction_prompt(
     question: str,
@@ -342,16 +558,12 @@ def build_answer_correction_prompt(
     failed_answer: str,
     error_message: str,
 ) -> str:
-    """
-    Build a strict correction prompt for an answer
-    that failed deterministic validation.
-    """
 
     return f"""
 You are correcting a database-backed analytics answer.
 
-The previous answer was rejected because it contained
-information that did not exactly match the database result.
+The previous answer was rejected because it did not
+correctly match the database result.
 
 USER QUESTION
 -------------
@@ -373,37 +585,22 @@ VALIDATION ERROR
 ----------------
 {error_message}
 
-CRITICAL NUMERIC RULE
----------------------
-The DATABASE RESULT ROWS are the ONLY source of numeric facts.
+STRICT RULES
+------------
 
-You MUST NOT calculate, estimate, infer, approximate,
-or invent any new numeric value.
-
-You MUST copy numeric values from DATABASE RESULT ROWS.
-
-The following numeric values are the ONLY numeric values
-available for the answer:
-
-{rows}
-
-If a value is not present in DATABASE RESULT ROWS,
-DO NOT mention it.
-
-FORMATTING RULES
-----------------
-1. You may add thousands separators.
-2. You may display decimal values rounded to two decimal places.
-3. Do not change the magnitude of a number.
-4. Do not introduce a currency symbol.
-5. Do not assume a currency.
-6. Do not convert units.
-7. Do not calculate percentages or differences unless
-   those values are already present in the result.
-8. Do not add numbers from your own knowledge.
-9. Do not mention unsupported information.
-10. Answer the user's question directly.
-11. Return only the corrected natural-language answer.
+1. DATABASE RESULT ROWS are the only source of numeric facts.
+2. Do not invent numbers.
+3. Do not estimate numbers.
+4. Do not infer missing numbers.
+5. Do not calculate new metrics.
+6. Copy numeric values from the database result.
+7. Do not assume a currency.
+8. Do not add currency symbols.
+9. Do not convert units.
+10. Clearly associate values with their corresponding
+    category or dimension.
+11. Answer the user's question directly.
+12. Return only the corrected natural-language answer.
 
 CORRECTED ANSWER:
 """.strip()

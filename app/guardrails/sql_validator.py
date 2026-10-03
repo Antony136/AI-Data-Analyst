@@ -1,8 +1,22 @@
 """
-SQL validation and safety checks for AI Data Analyst.
+SQL validation guardrails for AI Data Analyst.
 
-Validates SQL safety and verifies that referenced database
-tables exist in the known application schema.
+Validates generated SQL before it reaches the database.
+
+The validator supports:
+- SELECT queries
+- WITH ... SELECT queries
+- CTEs
+- table aliases
+- multiple JOINs
+- EXTRACT(... FROM ...) expressions
+
+It rejects:
+- non-SELECT statements
+- multiple statements
+- comments
+- unknown physical tables
+- forbidden SQL operations
 """
 
 import re
@@ -23,90 +37,80 @@ FORBIDDEN_KEYWORDS = {
 
 def clean_sql(sql: str) -> str:
     """
-    Clean common formatting added by an LLM.
-
-    Removes:
-    - Markdown SQL fences
-    - Leading 'SQL:' labels
-    - Backticks
-
-    Preserves valid PostgreSQL WITH queries.
+    Remove common LLM formatting around SQL.
     """
 
     sql = sql.strip()
 
     sql = re.sub(
-        r"```(?:sql)?",
+        r"^```sql\s*",
         "",
         sql,
         flags=re.IGNORECASE,
     )
 
     sql = re.sub(
-        r"^(?:here\s+is\s+the\s+)?sql\s*:\s*",
+        r"^```\s*",
         "",
         sql,
         flags=re.IGNORECASE,
     )
 
-    sql = sql.replace("```", "")
-    sql = sql.replace("`", "")
+    sql = re.sub(
+        r"\s*```$",
+        "",
+        sql,
+        flags=re.IGNORECASE,
+    )
+
+    sql = re.sub(
+        r"^(here is the sql|sql)\s*:\s*",
+        "",
+        sql,
+        flags=re.IGNORECASE,
+    )
 
     return sql.strip()
 
 
 def extract_cte_names(sql: str) -> set[str]:
     """
-    Extract Common Table Expression names.
-
-    Handles nested SELECT statements inside CTEs.
-
-    Example:
-
-        WITH
-            revenue AS (
-                SELECT ...
-            ),
-            totals AS (
-                SELECT ...
-            )
-        SELECT *
-        FROM totals
-
-    Returns:
-
-        {"revenue", "totals"}
+    Extract CTE names from a WITH clause.
     """
 
-    cte_names: set[str] = set()
+    sql = sql.strip()
 
-    match = re.match(
-        r"\s*WITH\s+",
+    if not re.match(
+        r"^WITH\b",
         sql,
         flags=re.IGNORECASE,
-    )
+    ):
+        return set()
 
-    if not match:
-        return cte_names
+    names = set()
 
-    position = match.end()
+    position = 4
     length = len(sql)
 
     while position < length:
 
-        # --------------------------------------------------
-        # Skip whitespace before the next CTE
-        # --------------------------------------------------
-
         while position < length and sql[position].isspace():
             position += 1
 
-        # --------------------------------------------------
-        # Read CTE name
-        # --------------------------------------------------
+        recursive_match = re.match(
+            r"RECURSIVE\b",
+            sql[position:],
+            flags=re.IGNORECASE,
+        )
+
+        if recursive_match:
+            position += recursive_match.end()
+
+            while position < length and sql[position].isspace():
+                position += 1
 
         name_match = re.match(
-            r"([a-zA-Z_][a-zA-Z0-9_]*)",
+            r"([A-Za-z_][A-Za-z0-9_]*)",
             sql[position:],
         )
 
@@ -115,45 +119,12 @@ def extract_cte_names(sql: str) -> set[str]:
 
         cte_name = name_match.group(1).lower()
 
+        names.add(cte_name)
+
         position += name_match.end()
 
-        # --------------------------------------------------
-        # Optional column list
-        #
-        # Example:
-        #
-        # revenue(category, amount) AS (...)
-        # --------------------------------------------------
-
-        while position < length and sql[position].isspace():
-            position += 1
-
-        if position < length and sql[position] == "(":
-
-            depth = 0
-
-            while position < length:
-
-                character = sql[position]
-
-                if character == "(":
-                    depth += 1
-
-                elif character == ")":
-                    depth -= 1
-
-                    if depth == 0:
-                        position += 1
-                        break
-
-                position += 1
-
-        # --------------------------------------------------
-        # Expect AS
-        # --------------------------------------------------
-
         as_match = re.match(
-            r"\s*AS\s*",
+            r"\s+AS\s*\(",
             sql[position:],
             flags=re.IGNORECASE,
         )
@@ -163,79 +134,135 @@ def extract_cte_names(sql: str) -> set[str]:
 
         position += as_match.end()
 
-        # --------------------------------------------------
-        # Expect opening parenthesis of CTE body
-        # --------------------------------------------------
+        depth = 1
 
-        while position < length and sql[position].isspace():
-            position += 1
+        while position < length and depth > 0:
 
-        if position >= length or sql[position] != "(":
-            break
-
-        cte_names.add(cte_name)
-
-        # --------------------------------------------------
-        # Skip complete CTE body.
-        #
-        # Parenthesis depth allows nested SELECTs.
-        # --------------------------------------------------
-
-        depth = 0
-
-        while position < length:
-
-            character = sql[position]
-
-            if character == "(":
+            if sql[position] == "(":
                 depth += 1
 
-            elif character == ")":
+            elif sql[position] == ")":
                 depth -= 1
-
-                if depth == 0:
-                    position += 1
-                    break
 
             position += 1
 
-        # --------------------------------------------------
-        # Check whether another CTE follows.
-        # --------------------------------------------------
+        if depth != 0:
+            break
 
         while position < length and sql[position].isspace():
             position += 1
 
-        if position >= length or sql[position] != ",":
-            break
+        if position < length and sql[position] == ",":
+            position += 1
+            continue
 
-        position += 1
+        break
 
-    return cte_names
+    return names
 
 
-def extract_table_names(sql: str) -> list[str]:
+def _is_inside_extract(sql: str, position: int) -> bool:
     """
-    Extract table-like names appearing after FROM or JOIN.
+    Return True when the given position is inside EXTRACT(...).
 
-    CTE names are excluded from the returned list.
+    This prevents:
+
+        EXTRACT(YEAR FROM orders.order_date)
+
+    from being interpreted as a table reference.
+
+    Normal subqueries are still allowed because only parentheses
+    belonging to EXTRACT are ignored.
     """
 
-    matches = re.findall(
-        r"\b(?:FROM|JOIN)\s+([a-zA-Z_][a-zA-Z0-9_]*)",
-        sql,
-        flags=re.IGNORECASE,
+    stack: list[str | None] = []
+
+    index = 0
+
+    while index < position:
+
+        character = sql[index]
+
+        if character == "(":
+
+            before_parenthesis = sql[:index]
+
+            function_match = re.search(
+                r"([A-Za-z_][A-Za-z0-9_]*)\s*$",
+                before_parenthesis,
+                flags=re.IGNORECASE,
+            )
+
+            if function_match:
+                function_name = function_match.group(1).lower()
+            else:
+                function_name = None
+
+            stack.append(function_name)
+
+        elif character == ")":
+
+            if stack:
+                stack.pop()
+
+        index += 1
+
+    return any(
+        function_name == "extract"
+        for function_name in stack
     )
 
-    cte_names = extract_cte_names(sql)
 
-    return list(
-        dict.fromkeys(
-            table.lower()
-            for table in matches
-            if table.lower() not in cte_names
+def extract_table_names(
+    sql: str,
+    cte_names: set[str],
+) -> list[str]:
+    """
+    Extract physical table references from FROM and JOIN clauses.
+
+    Handles:
+    - normal FROM clauses
+    - JOIN clauses
+    - table aliases
+    - subqueries
+    - CTEs
+
+    Does not treat the FROM inside EXTRACT(...) as a table reference.
+    """
+
+    table_names = []
+
+    pattern = re.compile(
+        r"""
+        \b
+        (?:FROM|JOIN)
+        \s+
+        (
+            [A-Za-z_][A-Za-z0-9_]*
+            (?:\.[A-Za-z_][A-Za-z0-9_]*)?
         )
+        """,
+        flags=re.IGNORECASE | re.VERBOSE,
     )
+
+    for match in pattern.finditer(sql):
+
+        keyword_position = match.start()
+
+        if _is_inside_extract(
+            sql,
+            keyword_position,
+        ):
+            continue
+
+        table_name = match.group(1).lower()
+
+        if table_name in cte_names:
+            continue
+
+        table_names.append(table_name)
+
+    return table_names
 
 
 def validate_tables(
@@ -243,16 +270,27 @@ def validate_tables(
     allowed_tables: set[str],
 ) -> tuple[bool, str]:
 
-    referenced_tables = extract_table_names(sql)
+    cte_names = extract_cte_names(sql)
 
-    for table in referenced_tables:
+    table_names = extract_table_names(
+        sql,
+        cte_names=cte_names,
+    )
 
-        if table not in allowed_tables:
+    for table_name in table_names:
 
-            return False, (
-                f"Unknown table referenced in SQL: {table}. "
-                f"Valid tables are: "
-                f"{', '.join(sorted(allowed_tables))}"
+        physical_table = table_name.split(".")[-1]
+
+        if physical_table not in allowed_tables:
+
+            return (
+                False,
+                (
+                    "Unknown table referenced in SQL: "
+                    f"{physical_table}. "
+                    "Valid tables are: "
+                    + ", ".join(sorted(allowed_tables))
+                ),
             )
 
     return True, sql
@@ -260,69 +298,54 @@ def validate_tables(
 
 def validate_sql(
     sql: str,
-    allowed_tables: set[str] | None = None,
+    allowed_tables: set[str],
 ) -> tuple[bool, str]:
 
-    # ------------------------------------------------------
-    # 1. Clean LLM output
-    # ------------------------------------------------------
+    sql = clean_sql(sql)
 
-    cleaned_sql = clean_sql(sql)
+    if not sql:
+        return False, "Generated SQL is empty."
 
-    if not cleaned_sql:
-        return False, "SQL query is empty."
+    if "--" in sql:
+        return False, "SQL comments are not allowed."
 
-    # ------------------------------------------------------
-    # 2. Reject Markdown fences that survived cleaning
-    # ------------------------------------------------------
+    if "/*" in sql or "*/" in sql:
+        return False, "SQL block comments are not allowed."
 
-    if "```" in cleaned_sql:
-        return False, (
-            "Markdown code fences are not allowed in SQL."
-        )
+    statements = [
+        statement.strip()
+        for statement in sql.split(";")
+        if statement.strip()
+    ]
 
-    # ------------------------------------------------------
-    # 3. Only SELECT / WITH queries are allowed
-    # ------------------------------------------------------
+    if len(statements) != 1:
+        return False, "Multiple SQL statements are not allowed."
 
-    normalized_sql = cleaned_sql.upper()
-
-    is_select = normalized_sql.startswith("SELECT")
-    is_with = normalized_sql.startswith("WITH")
-
-    if not is_select and not is_with:
-        return False, (
-            "Only SELECT statements are allowed."
-        )
-
-    # ------------------------------------------------------
-    # 4. Reject dangerous SQL keywords
-    # ------------------------------------------------------
+    if not re.match(
+        r"^\s*(SELECT|WITH)\b",
+        sql,
+        flags=re.IGNORECASE,
+    ):
+        return False, "Only SELECT queries are allowed."
 
     for keyword in FORBIDDEN_KEYWORDS:
 
-        pattern = rf"\b{keyword}\b"
-
         if re.search(
-            pattern,
-            normalized_sql,
+            rf"\b{keyword}\b",
+            sql,
+            flags=re.IGNORECASE,
         ):
-            return False, (
-                f"Forbidden SQL keyword detected: {keyword}"
+            return (
+                False,
+                f"Forbidden SQL operation detected: {keyword}",
             )
 
-    # ------------------------------------------------------
-    # 5. Validate referenced tables
-    # ------------------------------------------------------
+    valid, result = validate_tables(
+        sql=sql,
+        allowed_tables=allowed_tables,
+    )
 
-    if allowed_tables is not None:
+    if not valid:
+        return False, result
 
-        valid, result = validate_tables(
-            sql=cleaned_sql,
-            allowed_tables=allowed_tables,
-        )
-
-        if not valid:
-            return False, result
-
-    return True, cleaned_sql
+    return True, result

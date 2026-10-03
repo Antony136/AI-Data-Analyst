@@ -1,0 +1,266 @@
+[
+    {
+        "id": 1,
+        "question": "What was the total revenue in 2025?",
+        "expected_columns": [
+            "revenue"
+        ],
+        "expected_rows": [
+            [
+                80270895.146
+            ]
+        ]
+    },
+    {
+        "id": 2,
+        "question": "What was the total revenue in 2024?",
+        "expected_columns": [
+            "revenue"
+        ],
+        "expected_rows": [
+            [
+                79603423.8235
+            ]
+        ]
+    },
+    {
+        "id": 3,
+        "question": "What was the revenue in Q3 2025?",
+        "expected_columns": [
+            "revenue"
+        ],
+        "expected_rows": [
+            [
+                14513286.6155
+            ]
+        ]
+    },
+    {
+        "id": 4,
+        "question": "Show revenue by product category.",
+        "expected_columns": [
+            "category",
+            "revenue"
+        ],
+        "expected_rows": [
+            [
+                "Electronics",
+                83553468.5895
+            ],
+            [
+                "Fashion",
+                12511178.182
+            ],
+            [
+                "Home",
+                34957624.1825
+            ],
+            [
+                "Office",
+                14026924.8485
+            ],
+            [
+                "Sports",
+                14825123.167
+            ]
+        ]
+    },
+    {
+        "id": 5,
+        "question": "What was the revenue by category in 2025?",
+        "expected_columns": [
+            "category",
+            "revenue"
+        ],
+        "expected_rows": [
+            [
+                "Electronics",
+                41067364.604
+            ],
+            [
+                "Fashion",
+                6363825.7335
+            ],
+            [
+                "Home",
+                18083529.0395
+            ],
+            [
+                "Office",
+                7111185.4035
+            ],
+            [
+                "Sports",
+                7644990.3655
+            ]
+        ]
+    },
+    {
+        "id": 6,
+        "question": "What was the revenue by region?",
+        "expected_columns": [
+            "shipping_region",
+            "revenue"
+        ],
+        "expected_rows": [
+            [
+                "Central",
+                23253596.4675
+            ],
+            [
+                "East",
+                29059608.465
+            ],
+            [
+                "North",
+                33776660.217
+            ],
+            [
+                "South",
+                40344729.178
+            ],
+            [
+                "West",
+                33439724.642
+            ]
+        ]
+    },
+    {
+        "id": 7,
+        "question": "What was the revenue by customer segment?",
+        "expected_columns": [
+            "customer_segment",
+            "revenue"
+        ],
+        "expected_rows": [
+            [
+                "Consumer",
+                88493319.106
+            ],
+            [
+                "Enterprise",
+                24839240.461
+            ],
+            [
+                "Small Business",
+                46541759.4025
+            ]
+        ]
+    },
+    {
+        "id": 8,
+        "question": "How many orders were placed in 2025?",
+        "expected_columns": [
+            "order_count"
+        ],
+        "expected_rows": [
+            [
+                50889.0
+            ]
+        ]
+    },
+    {
+        "id": 9,
+        "question": "What percentage of revenue came from each category?",
+        "expected_columns": [
+            "category",
+            "revenue",
+            "percentage"
+        ],
+        "expected_rows": [
+            [
+                "Electronics",
+                83553468.5895,
+                52.26
+            ],
+            [
+                "Fashion",
+                12511178.182,
+                7.83
+            ],
+            [
+                "Home",
+                34957624.1825,
+                21.87
+            ],
+            [
+                "Office",
+                14026924.8485,
+                8.77
+            ],
+            [
+                "Sports",
+                14825123.167,
+                9.27
+            ]
+        ]
+    },
+    {
+        "id": 10,
+        "question": "What was the average order value in 2025?",
+        "expected_columns": [
+            "average_order_value"
+        ],
+        "expected_rows": [
+            [
+                1813.4168111600588
+            ]
+        ]
+    },
+    {
+        "id": 11,
+        "question": "Show the top 5 product categories by revenue in 2025.",
+        "expected_columns": [
+            "category",
+            "revenue"
+        ],
+        "expected_rows": [
+            [
+                "Electronics",
+                41067364.604
+            ],
+            [
+                "Home",
+                18083529.0395
+            ],
+            [
+                "Sports",
+                7644990.3655
+            ],
+            [
+                "Office",
+                7111185.4035
+            ],
+            [
+                "Fashion",
+                6363825.7335
+            ]
+        ]
+    },
+    {
+        "id": 12,
+        "question": "Show the quarterly revenue for 2025.",
+        "expected_columns": [
+            "quarter",
+            "revenue"
+        ],
+        "expected_rows": [
+            [
+                "Q1",
+                20836379.8155
+            ],
+            [
+                "Q2",
+                21898280.596
+            ],
+            [
+                "Q3",
+                14513286.6155
+            ],
+            [
+                "Q4",
+                23022948.119
+            ]
+        ]
+    }
+]
