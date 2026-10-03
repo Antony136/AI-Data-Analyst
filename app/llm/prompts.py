@@ -2,25 +2,23 @@
 Prompt templates for AI Data Analyst.
 """
 
-
 def build_sql_prompt(
     question: str,
     schema_text: str,
 ) -> str:
-    """
-    Build a prompt that asks the LLM to generate
-    PostgreSQL SQL from a natural-language question.
-    """
-
     return f"""
 You are an expert PostgreSQL data analyst.
 
-Your task is to convert a user's natural-language
-question into a valid PostgreSQL SQL query.
+Generate a PostgreSQL SELECT query that retrieves
+the data required to answer the user's question.
 
 DATABASE SCHEMA
 ---------------
 {schema_text}
+
+USER QUESTION
+-------------
+{question}
 
 BUSINESS RULES
 --------------
@@ -43,30 +41,129 @@ When calculating AOV, first calculate the total
 revenue for each order and then calculate the average
 across orders.
 
-Do NOT calculate AOV by applying AVG() directly to
-order_items revenue, because one order can contain
-multiple order_items.
+SQL RESPONSIBILITY
+------------------
+SQL is responsible for RETRIEVING the required data.
 
-RULES
------
-1. Generate only SQL.
-2. Do not use Markdown code fences.
-3. Use only tables and columns that exist in the schema.
-4. Use PostgreSQL syntax.
-5. Do not modify the database.
-6. Do not use INSERT, UPDATE, DELETE, DROP, ALTER, or TRUNCATE.
-7. Apply the business rules when they are relevant.
-8. Apply metric definitions when they are relevant.
-9. Prefer clear and simple SQL.
-10. Answer the user's question directly.
-11. Do not assume a currency unless the database provides one.
-12. Do not add currency symbols to numeric values.
+If the question requires a derived analysis such as:
+- percentage contribution
+- percentage share
+- statistical analysis
+- summary statistics
 
-USER QUESTION
--------------
-{question}
+retrieve the values required for that analysis, but
+do not unnecessarily calculate the derived analysis
+inside SQL.
 
-SQL:
+The Python analysis tools will perform those
+calculations after the SQL result is converted into
+a DataFrame.
+
+For example, for:
+
+"What percentage of revenue came from each category?"
+
+prefer returning:
+
+    category
+    revenue
+
+rather than calculating the percentage inside SQL.
+
+The Python percentage-analysis tool will calculate:
+
+    category revenue / total revenue * 100
+
+However, SQL SHOULD perform database-level aggregation
+when that aggregation is naturally part of retrieving
+the required data.
+
+For example:
+
+    SUM(quantity * unit_price * (1 - discount_percent / 100))
+
+is appropriate for obtaining revenue by category.
+
+JOIN RULES
+----------
+1. Only JOIN a table when data from that table is
+   actually required to answer the user's question.
+
+2. Do NOT JOIN a table merely because it exists in
+   the database schema.
+
+3. Before adding a JOIN, identify the specific column
+   or filter that requires the table.
+
+4. Avoid unnecessary one-to-many JOINs when calculating
+   SUM(), COUNT(), AVG(), or other aggregates.
+
+5. A JOIN must not unintentionally multiply rows.
+
+6. For revenue calculations, order_items must be joined
+   to orders when order-level filters such as order_status
+   are required.
+
+7. Products should be joined when product attributes such
+   as category, product name, or subcategory are required.
+
+8. Payments should be joined ONLY when payment-related
+   information or payment-related filtering is explicitly
+   required by the user's question.
+
+9. Customers should be joined ONLY when customer-related
+   information or customer-related filtering is explicitly
+   required by the user's question.
+
+10. If the question can be answered using fewer tables,
+    prefer the query using fewer tables.
+
+11. Never add a JOIN simply to make the query appear more
+    complete.
+
+12. When calculating aggregates, reason about the row
+    cardinality introduced by every JOIN.
+
+GENERAL SQL RULES
+-----------------
+1. Return ONLY the SQL query.
+2. Do NOT use Markdown code fences.
+3. Use PostgreSQL syntax.
+4. Use ONLY tables and columns present in the schema.
+5. Preserve the user's intended question.
+6. Apply the business rules above.
+7. Use appropriate JOIN conditions.
+8. Use unique table aliases.
+9. Do not reference a table name after assigning it
+   an alias; use the alias consistently.
+10. Do not invent tables, columns, functions, or fields.
+11. Do not use INSERT, UPDATE, DELETE, DROP, ALTER,
+    TRUNCATE, CREATE, GRANT, or REVOKE.
+12. Do not modify database data or database structure.
+13. Do not assume a currency.
+14. Do not add currency symbols.
+15. Do not add unnecessary tables or JOINs.
+16. Do not calculate derived Python-analysis metrics
+    when the raw/aggregated values are sufficient.
+
+FINAL CHECK
+-----------
+Before returning the SQL, verify:
+
+- Every referenced table exists in the schema.
+- Every JOIN is necessary.
+- Every JOIN has a valid relationship.
+- No JOIN unnecessarily multiplies rows.
+- Aggregate calculations are not distorted by
+  unnecessary relationships.
+- Every alias is unique.
+- Every alias is used consistently.
+- Only required columns are selected.
+- The query answers the user's actual question.
+
+OUTPUT
+------
+Return only executable PostgreSQL SQL.
 """.strip()
 
 

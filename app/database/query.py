@@ -2,12 +2,14 @@
 SQL query execution for AI Data Analyst.
 
 Provides a controlled database execution layer with
-query timeout and result-size protection.
+query validation, timeout protection, and result-size
+protection.
 """
 
 from app.database.connection import get_connection
 from app.guardrails.query_guard import (
     get_query_limits,
+    validate_query_shape,
 )
 
 
@@ -15,23 +17,48 @@ def execute_query(sql: str):
     """
     Execute a validated read-only SQL query.
 
-    Applies deterministic execution limits:
-    - statement timeout
-    - maximum returned rows
+    Applies deterministic execution protections:
+
+    1. Query-shape validation
+    2. Statement timeout
+    3. Maximum result-row limit
+    4. Safe connection cleanup
     """
+
+    # ------------------------------------------------------
+    # 1. Validate query shape before touching the database
+    # ------------------------------------------------------
+
+    valid, result = validate_query_shape(sql)
+
+    if not valid:
+        raise ValueError(
+            f"Query rejected: {result}"
+        )
+
+    cleaned_sql = result
+
+    # ------------------------------------------------------
+    # 2. Load execution limits
+    # ------------------------------------------------------
 
     limits = get_query_limits()
 
     max_result_rows = limits["max_result_rows"]
     timeout_ms = limits["timeout_ms"]
 
+    # ------------------------------------------------------
+    # 3. Open database connection
+    # ------------------------------------------------------
+
     connection = get_connection()
 
     try:
+
         with connection.cursor() as cursor:
 
             # --------------------------------------------------
-            # 1. Set PostgreSQL statement timeout
+            # 4. Set PostgreSQL statement timeout
             # --------------------------------------------------
 
             cursor.execute(
@@ -39,19 +66,21 @@ def execute_query(sql: str):
             )
 
             # --------------------------------------------------
-            # 2. Execute the query
+            # 5. Execute the validated query
             # --------------------------------------------------
 
-            cursor.execute(sql)
+            cursor.execute(cleaned_sql)
 
             # --------------------------------------------------
-            # 3. Read only the allowed number of rows
+            # 6. Read only the allowed number of rows
             # --------------------------------------------------
 
-            rows = cursor.fetchmany(max_result_rows)
+            rows = cursor.fetchmany(
+                max_result_rows
+            )
 
             # --------------------------------------------------
-            # 4. Detect whether more rows exist
+            # 7. Detect whether additional rows exist
             # --------------------------------------------------
 
             extra_row = cursor.fetchone()
@@ -63,7 +92,7 @@ def execute_query(sql: str):
                 )
 
             # --------------------------------------------------
-            # 5. Get column names
+            # 8. Get column names
             # --------------------------------------------------
 
             columns = [
@@ -74,4 +103,9 @@ def execute_query(sql: str):
             return columns, rows
 
     finally:
+
+        # ------------------------------------------------------
+        # 9. Always close the database connection
+        # ------------------------------------------------------
+
         connection.close()
