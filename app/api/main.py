@@ -2,11 +2,18 @@
 FastAPI application entry point for AI Data Analyst.
 """
 
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from app.api.routes import router
 
+
+# ------------------------------------------------------------
+# Application
+# ------------------------------------------------------------
 
 app = FastAPI(
     title="AI Data Analyst",
@@ -14,6 +21,10 @@ app = FastAPI(
     version="1.0.0",
 )
 
+
+# ------------------------------------------------------------
+# CORS
+# ------------------------------------------------------------
 
 app.add_middleware(
     CORSMiddleware,
@@ -27,15 +38,41 @@ app.add_middleware(
 )
 
 
+# ------------------------------------------------------------
+# Static visualization files
+# ------------------------------------------------------------
+
+VISUALIZATION_DIRECTORY = (
+    Path(__file__).resolve().parents[2]
+    / "data"
+    / "visualizations"
+)
+
+VISUALIZATION_DIRECTORY.mkdir(
+    parents=True,
+    exist_ok=True,
+)
+
+app.mount(
+    "/visualizations",
+    StaticFiles(directory=VISUALIZATION_DIRECTORY),
+    name="visualizations",
+)
+
+
+# ------------------------------------------------------------
+# API routes
+# ------------------------------------------------------------
+
 app.include_router(router)
 
 
+# ------------------------------------------------------------
+# Basic routes
+# ------------------------------------------------------------
+
 @app.get("/")
 def root():
-    """
-    Health check endpoint.
-    """
-
     return {
         "name": "AI Data Analyst",
         "status": "running",
@@ -44,10 +81,6 @@ def root():
 
 @app.get("/health")
 def health():
-    """
-    API health check.
-    """
-
     return {
         "status": "healthy",
     }

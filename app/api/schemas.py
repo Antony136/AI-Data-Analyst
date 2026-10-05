@@ -8,10 +8,6 @@ from pydantic import BaseModel, Field
 
 
 class AnalyzeRequest(BaseModel):
-    """
-    Request body for the /analyze endpoint.
-    """
-
     question: str = Field(
         ...,
         min_length=1,
@@ -20,10 +16,6 @@ class AnalyzeRequest(BaseModel):
 
 
 class AnalyzeResponse(BaseModel):
-    """
-    Response returned by the /analyze endpoint.
-    """
-
     question: str
     answer: str
 
@@ -33,5 +25,7 @@ class AnalyzeResponse(BaseModel):
     rows: list[list[Any]] = []
 
     tools_used: list[str] = []
+
+    chart_url: str | None = None
 
     trace: dict[str, Any] = {}
